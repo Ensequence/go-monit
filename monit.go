@@ -106,7 +106,7 @@ func (m Monit) getStat () {
 	runtime.ReadMemStats(&stats)
 
 	// Mem_used in MB
-	m.config.Base["mem_used"] = float64(stats.HeapAlloc) / 1000000
+	m.config.Base["app_used_memory"] = float64(stats.HeapAlloc) / 1000000
 	m.config.Base["uptime"] = time.Now().Unix() - m.start
 }
 
