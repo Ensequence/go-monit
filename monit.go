@@ -1,26 +1,43 @@
 // package monit provides a metric reporting mechanism for webapps
 //
 // Basic usage:
+//
+//		m = monit.NewMonitor(monit.Config{
+//			Host: "https://myhost.com/reporting/",
+//			Base: map[string]interface{}{
+//				"auth": "maybeINeedThis?"
+//			},
+//		})
+//		m.Start()
 package monit
 
 import (
 	"github.com/swhite24/envreader"
 	"strconv"
 	"time"
-	"fmt"
+	"runtime"
+	"encoding/json"
+	"bytes"
+	"net/http"
+	"crypto/tls"
+)
+
+var (
+	stats runtime.MemStats
+	client http.Client
 )
 
 type (
 
 	// Config contains configuration values for monit.  Values default to environment
-	// variables described below.
+	// variables where appropriate.
 	Config struct {
 
 		// Fully qualified url to send monitoring data to.
 		// Can be provided in MONIT_HOST environment variable
 		Host string
 
-		// Interval at which to report metrics.
+		// Interval, in seconds, at which to report metrics.
 		// Can be provided in MONIT_INTERVAL environment variable
 		Interval int
 
@@ -33,17 +50,14 @@ type (
 		config Config
 		requests int
 		cont bool
-	}
-
-	metric struct {
-
+		start int64
 	}
 )
 
-// Monitor provides an instance of Monit.
+// NewMonitor provides an instance of Monit.
 //
 // Any zero-valued Config properties will use environment variables described above where appropriate.
-func Monitor (c Config) (m Monit) {
+func NewMonitor (c Config) (m Monit) {
 	// Load environment
 	vals := envreader.Read("MONIT_HOST", "MONIT_INTERVAL")
 
@@ -54,33 +68,62 @@ func Monitor (c Config) (m Monit) {
 		if (err != nil) { panic(err) }
 		c.Interval = i
 	}
+	if len(c.Base) == 0 { c.Base = make(map[string]interface{}) }
 
-	m = Monit{ c , 0, true }
+	m = Monit{ c , 0, true, time.Now().Unix() }
 
 	return m
 }
 
 // Start starts a goroutine to report metrics to host based on Config value.
-func (m Monit) Start () {
-	go report(m)
+func (m *Monit) Start () {
+	go (func (m *Monit) {
+		for m.cont {
+			// Sleep for specified interval
+			time.Sleep(time.Duration(m.config.Interval) * time.Second)
+
+			m.report()
+
+			// Reset
+			m.requests = 0
+		}
+	})(m)
 }
 
-// Request increments count of requests to report
-func (m Monit) Request () {
+func (m Monit) report () {
+	// Get current stats
+	m.getStat()
+
+	// Get json buffer
+	stat, _ := json.Marshal(m.config.Base)
+	buf := bytes.NewBuffer(stat)
+	
+	// Issue request
+	client.Post(m.config.Host, "application/json", buf)
+}
+
+func (m Monit) getStat () {
+	runtime.ReadMemStats(&stats)
+
+	// Mem_used in MB
+	m.config.Base["mem_used"] = float64(stats.HeapAlloc) / 1000000
+	m.config.Base["uptime"] = time.Now().Unix() - m.start
+}
+
+// Stop stops all reporting.  Call Start to begin again.
+func (m *Monit) Stop () {
+	m.cont = false
+}
+
+// Request increments count of requests to report for current interval.
+func (m *Monit) Request () {
 	m.requests = m.requests + 1
 }
 
-func report (m Monit) {
-	// Sleep for specified interval
-	time.Sleep(time.Duration(m.config.Interval) * time.Second)
-
-	// TODO: implement metric gathering / submission
-	fmt.Printf("Reporting\n")
-	fmt.Println(m)
-
-	// Reset
-	m.requests = 0
-
-	// Keep going
-	report(m)
+func init () {
+	// Setup transport to ignore invalid certs
+	transport := &http.Transport{
+		TLSClientConfig: &tls.Config{ InsecureSkipVerify: true },
+	}
+	client = http.Client{ Transport: transport }
 }
