@@ -23,7 +23,6 @@ import (
 )
 
 var (
-	stats runtime.MemStats
 	client http.Client
 )
 
@@ -47,7 +46,7 @@ type (
 
 	// Monit exposes monitoring func
 	Monit struct {
-		config Config
+		config *Config
 		requests int
 		cont bool
 		start int64
@@ -70,7 +69,7 @@ func NewMonitor (c Config) (m Monit) {
 	}
 	if len(c.Base) == 0 { c.Base = make(map[string]interface{}) }
 
-	m = Monit{ c , 0, true, time.Now().Unix() }
+	m = Monit{ &c , 0, true, time.Now().Unix() }
 
 	return m
 }
@@ -90,19 +89,20 @@ func (m *Monit) Start () {
 	})(m)
 }
 
-func (m Monit) report () {
+func (m *Monit) report () {
 	// Get current stats
 	m.getStat()
 
 	// Get json buffer
 	stat, _ := json.Marshal(m.config.Base)
 	buf := bytes.NewBuffer(stat)
-	
 	// Issue request
-	client.Post(m.config.Host, "application/json", buf)
+	r, _ := client.Post(m.config.Host, "application/json", buf)
+	defer r.Body.Close()
 }
 
-func (m Monit) getStat () {
+func (m *Monit) getStat () {
+	var stats runtime.MemStats
 	runtime.ReadMemStats(&stats)
 
 	// Mem_used in MB
