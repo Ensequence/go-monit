@@ -98,7 +98,9 @@ func (m *Monit) report () {
 	buf := bytes.NewBuffer(stat)
 	// Issue request
 	r, _ := client.Post(m.config.Host, "application/json", buf)
-	defer r.Body.Close()
+	if r != nil {
+		defer r.Body.Close()
+	}
 }
 
 func (m *Monit) getStat () {
