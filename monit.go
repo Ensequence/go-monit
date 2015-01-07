@@ -47,21 +47,22 @@ type (
 
 	// Monit exposes monitoring func
 	Monit struct {
-		config   *Config
-		requests int
-		cont     bool
-		start    int64
+		config    *Config
+		requests  int64
+		durations int64
+		cont      bool
+		start     int64
 	}
 )
 
 // NewMonitor provides an instance of Monit.
 //
 // Any zero-valued Config properties will use environment variables described above where appropriate.
-func NewMonitor(c Config) (m *Monit) {
+func NewMonitor(c Config) *Monit {
 	// Load environment
 	vals := envreader.Read("MONIT_HOST", "MONIT_INTERVAL")
 
-	// Check c
+	// Check host and interval values
 	if c.Host == "" {
 		c.Host = vals["MONIT_HOST"]
 	}
@@ -72,13 +73,14 @@ func NewMonitor(c Config) (m *Monit) {
 		}
 		c.Interval = i
 	}
+
+	// Initialize base report object
 	if len(c.Base) == 0 {
 		c.Base = make(map[string]interface{})
 	}
 
-	m = &Monit{&c, 0, true, time.Now().Unix()}
-
-	return m
+	// Deliver monit
+	return &Monit{&c, 0, 0, true, time.Now().Unix()}
 }
 
 // Start starts a goroutine to report metrics to host based on Config value.
@@ -92,10 +94,30 @@ func (m *Monit) Start() {
 
 			// Reset
 			m.requests = 0
+			m.durations = 0
 		}
 	})(m)
 }
 
+// Stop stops all reporting.  Call Start to begin again.
+func (m *Monit) Stop() {
+	m.cont = false
+}
+
+// Request increments count of requests to report for the current interval. A
+// duration may be optionally as the length the request took
+func (m *Monit) Request(d ...int64) {
+	if len(d) > 0 {
+		m.durations = m.durations + d[0]
+	}
+	m.requests = m.requests + 1
+}
+
+// --------------------------------------------------------
+// Utility methods
+// --------------------------------------------------------
+
+// report is used to deliver the
 func (m *Monit) report() {
 	// Get current stats
 	m.getStat()
@@ -110,25 +132,27 @@ func (m *Monit) report() {
 	}
 }
 
+// getStat populates the base object with some predefined metrics
 func (m *Monit) getStat() {
 	var stats runtime.MemStats
 	runtime.ReadMemStats(&stats)
 
-	// Mem_used in MB
+	// Gather base
 	m.config.Base["app_used_memory"] = float64(stats.HeapAlloc) / 1000000
 	m.config.Base["uptime"] = time.Now().Unix() - m.start
+
+	// Get requests / response times
+	m.config.Base["requests"] = m.requests
+	if m.requests > 0 {
+		m.config.Base["response_times"] = m.durations / m.requests
+	} else {
+		m.config.Base["response_times"] = 0
+	}
 }
 
-// Stop stops all reporting.  Call Start to begin again.
-func (m *Monit) Stop() {
-	m.cont = false
-}
-
-// Request increments count of requests to report for current interval.
-func (m *Monit) Request() {
-	m.requests = m.requests + 1
-}
-
+// --------------------------------------------------------
+// Initialization
+// --------------------------------------------------------
 func init() {
 	// Setup transport to ignore invalid certs
 	transport := &http.Transport{
